@@ -1,12 +1,9 @@
 import os
 from random import randint
 import time
-import hashlib
 import logging
-import datetime
-import json
-import ntpath
-from json import JSONEncoder, JSONDecoder
+from pymongo import MongoClient
+import subprocess
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -26,6 +23,13 @@ logger.addHandler(handler)
 testFilePath = os.path.join(os.getcwd(), 'testfiles')
 datafile = os.path.join(os.getcwd(), 'otsdata.json')
 
+client = MongoClient("localhost")
+db = client.ots
+
+def insertOtsObj(file):
+    res = db.otsfiles.insert_one(file)
+    print(res)
+
 def getRandomInt ():
     return randint(1, 1024)
 
@@ -34,9 +38,6 @@ def writeRandomFile (path):
     with open((filePath), 'wb') as fout:
         fout.write(os.urandom(getRandomInt()))
     return filePath
-
-def getEpochTime ():
-    time.time()
 
 def getLocalTimeFromEpoch (epoch):
     return time.strftime('%Y-%m-%d %H:%M:%S:%f', epoch)
@@ -58,118 +59,157 @@ def info (file):
     except:
         return res
 
+def upgrade (file):
+    res = subprocess.getoutput('ots upgrade ' + file)
+    print (res)
+    if res.__contains__("Success! Timestamp complete"):
+        return True
+    else:
+        return False
+
+def verify(file):
+    res = subprocess.getoutput('ots verify ' + file)
+    print(res)
+    return res
+
 def getProofPath (file):
     return file + '.ots'
 
-def loadjson (file):
-    with open(file) as json_data:
-        return json.loads(json_data.read())
+def parseVerifiedDate(date):
+    parts = date.split()
 
-def savejson (file, dataobject):
-    with open(file, 'w') as outfile:
-        json.dump(json.dumps(Encoder().encode(dataobject)), outfile)
+#print(json.dumps(Encoder().encode(otsdata)))
+def create_new_file():
+
+    otsevent = {
+        'name': '',
+        'time': '',
+        'command': '',
+        'message': ''
+    }
+    otsproof = {
+        'created': False,
+        'committed': False,
+        'info': '',
+        'upgraded': False,
+        'verified': False
+    }
+    otsobj = {
+        'name': '',
+        'path': '',
+        'proof': '',
+        'events': [],
+        'size': ''
+    }
+    filePath = writeRandomFile(testFilePath)
+    otsobj['events'].append({
+        'name': 'CreateFile',
+        'time': time.time(),
+        'command': 'create',
+        'message': 'Created new file ' + filePath
+    })
+
+    #stamp that thaang
+    committed = stamp(filePath)
+    #committed = False
+
+    #update otsproof
+    otsproof['created'] = True
+    otsproof['committed'] = committed
+    otsproof['info'] = info(getProofPath(filePath))
+
+    otsobj['events'].append({
+        'name': 'StampFile',
+        'time': time.time(),
+        'command': 'stamp',
+        'message': 'Stamped file '+filePath+' with result '+ str(committed)
+    })
+    # proofpath = getProofPath(filePath)
+    # print(proofpath)
+    logger.info('Stamp created for %s', filePath)
+    otsobj['name'] = os.path.basename(filePath)
+    otsobj['path'] = filePath
+    otsobj['proof'] = otsproof
+    otsobj['size'] = os.path.getsize(filePath)
+    # formulate otsfile object
+    # Add it to the db
+    insertOtsObj(otsobj)
+
+def verify_timestamp():
+    otsobjs = db.otsfiles.find({"proof.upgraded": True, "proof.verified": False})
+
+    # loop through all the non-upgraded stamps and upgrade them
+    for otsobj in otsobjs:
+        # print(str(otsobj))
+        # get the object id so we can reference it later
+        _id = otsobj['_id']
+        print(_id)
+        print(otsobj)
+        print(getProofPath(otsobj['path']))
+        res = verify(getProofPath(otsobj['path']))
+
+        if res.__contains__('Pending confirmation in Bitcoin blockchain'):
+            verified = False
+        elif res.__contains__('Success! Bitcoin attests data existed'):
+            verified = True
+
+        otsevent = {
+            'name': 'VerifyFile',
+            'time': time.time(),
+            'command': 'verify',
+            'message': 'Performed a verification and the result was ' + str(res)
+        }
+
+        # update the proof
+        otsobj['proof']['verified'] = True
+        otsobj['proof']['verifiedTime'] = time.time()
+        otsobj['proof']['info'] = res
+        # add the event
+        otsobj['events'].append(otsevent)
+
+        # update obj based on _id
+        db.otsfiles.replace_one({"_id": _id}, otsobj)
+
+def upgrade_timestamps():
+    otsobjs = db.otsfiles.find({"proof.upgraded": False})
+
+    # loop through all the non-upgraded stamps and upgrade them
+    for otsobj in otsobjs:
+        #print(str(otsobj))
+        # get the object id so we can reference it later
+        _id = otsobj['_id']
+
+        #print(_id)
+        # perfrom teh upgrade
+        res = upgrade(getProofPath(otsobj['path']))
+
+        #print(str(res))
+        # create an event for the upgrade
+        otsevent = {
+            'name': 'UpgradeFile',
+            'time': time.time(),
+            'command': 'upgrade',
+            'message': 'Performed an upgrade and the result was ' + str(res)
+        }
+
+        # update the proof
+        otsobj['proof']['upgraded'] = res
+        # add the event
+        otsobj['events'].append(otsevent)
+
+        #update obj based on _id
+        db.otsfiles.replace_one({"_id": _id}, otsobj)
 
 
-# add json encoder
-class Encoder(JSONEncoder):
-    def default(self, o):
-        return o.__dict__
 
-class ProofStatus:
 
-    def __init__(self, proofcreated, info, upgraded, commited, verified):
-        self.proofcreated = proofcreated
-        self.commited = commited
-        self.info = info
-        self.upgraded = upgraded
-        self.verified = verified
+# Create and save new file
+#create_new_file()
 
-class Event:
-
-    def __init__(self, name, time, proof, command, message):
-        self.name = name
-        self.time = time
-        self.proof = proof
-        self.command = command
-        self.message = message
-
-class OtsFile:
-
-    def __init__(self, name, path, proof, proofstatus, size, events):
-        self.name = name
-        self.path = path
-        self.proof = proof
-        self.proofstatus = proofstatus
-        self.size = size
-        self.events = events
-
-# first things first - we load the data
-otsdata = []
-
-if os.path.isfile(datafile):
-    # load json data
-    print(datafile)
-    otsdata.append(loadjson(datafile))
-    print(otsdata)
-
-#otsdata.append(otsfile)
-
-print(json.dumps(Encoder().encode(otsdata)))
-
-# Create a new file
-otsevents = []
-
-filePath = writeRandomFile(testFilePath)
-otsevents.append(
-    Event(
-        'CreateFile',
-        getEpochTime(),
-        getProofPath(filePath),
-        'create',
-        'Created new file '+ filePath,
-    )
-)
-
-committed = stamp(filePath)
-otsevents.append(
-    Event(
-        'StampFile',
-        getEpochTime(),
-        getProofPath(filePath),
-        'stamp',
-        ('Stamped file %s with result %s', filePath, committed),
-    )
-)
-
-#proofpath = getProofPath(filePath)
-
-#print(proofpath)
-
-logger.info('Stamp created for %s', filePath)
-
- #formulate otsfile object
-otsfile = OtsFile(
-    os.path.basename(filePath),
-    filePath,
-    getProofPath(filePath),
-    ProofStatus(
-        False,
-        committed,
-        info(getProofPath(filePath)),
-        False,
-        False
-    ),
-    os.path.getsize(filePath),
-    otsevents
-)
-
-# Add it to the object
-otsdata.append(otsfile)
 
 # See who should be upgraded and upgrade them
+upgrade_timestamps()
 
 # See who has been upgraded and verify them
-
-# save the object since we're done with it
-savejson(datafile, otsdata)
+verify_timestamp()
 
