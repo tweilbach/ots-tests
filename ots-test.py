@@ -1,9 +1,13 @@
+#!/usr/bin/env python3
+
 import os
 from random import randint
-import time
 import logging
 from pymongo import MongoClient
 import subprocess
+import time
+from time import mktime
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -19,19 +23,21 @@ handler.setFormatter(formatter)
 # add the handlers to the logger
 logger.addHandler(handler)
 
-
-testFilePath = os.path.join(os.getcwd(), 'testfiles')
-datafile = os.path.join(os.getcwd(), 'otsdata.json')
-
+# setup connection to mongo instance
 client = MongoClient("localhost")
 db = client.ots
+
+
+testFilePath = os.path.join(os.getcwd(), 'testfiles')
 
 def insertOtsObj(file):
     res = db.otsfiles.insert_one(file)
     print(res)
 
+
 def getRandomInt ():
     return randint(1, 1024)
+
 
 def writeRandomFile (path):
     filePath = os.path.join(path, str(time.time()) + '.tst')
@@ -39,12 +45,24 @@ def writeRandomFile (path):
         fout.write(os.urandom(getRandomInt()))
     return filePath
 
+
+def getProofTimestamp(proofstring):
+    # split the string and get the time component
+    tstime = proofstring.split("as of ", 1)[1]
+    # format the time string
+    time_tuple = time.strptime(tstime, '%a %b %d %H:%M:%S %Y %Z')
+    # Make a datetime object from fortmatted time
+    dt = datetime.fromtimestamp(mktime(time_tuple))
+    #return timestamp
+    return dt.timestamp()
+
+
 def getLocalTimeFromEpoch (epoch):
     return time.strftime('%Y-%m-%d %H:%M:%S:%f', epoch)
 
 def stamp (file):
     try:
-        res = os.system(('ots stamp ' + file))
+        res = subprocess.getoutput('~/Downloads/Code/opentimestamps-client/ots stamp ' + file)
         print(res)
         return True
     except:
@@ -53,14 +71,14 @@ def stamp (file):
 def info (file):
     res = ''
     try:
-        res = os.system(('ots -v info ' + file))
+        res = subprocess.getoutput('~/Downloads/Code/opentimestamps-client/ots -v info ' + file)
         print(res)
         return res
     except:
         return res
 
 def upgrade (file):
-    res = subprocess.getoutput('ots upgrade ' + file)
+    res = subprocess.getoutput('~/Downloads/Code/opentimestamps-client/ots upgrade ' + file)
     print (res)
     if res.__contains__("Success! Timestamp complete"):
         return True
@@ -68,7 +86,7 @@ def upgrade (file):
         return False
 
 def verify(file):
-    res = subprocess.getoutput('ots verify ' + file)
+    res = subprocess.getoutput('~/Downloads/Code/opentimestamps-client/ots verify ' + file)
     print(res)
     return res
 
@@ -115,6 +133,7 @@ def create_new_file():
 
     #update otsproof
     otsproof['created'] = True
+    otsproof['createdTime'] = time.time()
     otsproof['committed'] = committed
     otsproof['info'] = info(getProofPath(filePath))
 
@@ -162,8 +181,9 @@ def verify_timestamp():
 
         # update the proof
         otsobj['proof']['verified'] = True
-        otsobj['proof']['verifiedTime'] = time.time()
+        otsobj['proof']['verifiedTime'] = getProofTimestamp(res)
         otsobj['proof']['info'] = res
+        otsobj['proof']['attestationDetail'] = info(getProofPath(otsobj['path']))
         # add the event
         otsobj['events'].append(otsevent)
 
@@ -204,8 +224,7 @@ def upgrade_timestamps():
 
 
 # Create and save new file
-#create_new_file()
-
+create_new_file()
 
 # See who should be upgraded and upgrade them
 upgrade_timestamps()
