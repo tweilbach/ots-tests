@@ -145,7 +145,7 @@ def create_new_file():
     })
     # proofpath = getProofPath(filePath)
     # print(proofpath)
-    logger.info('Stamp created for %s', filePath)
+    logger.info("Stamp created for %s", filePath)
     otsobj['name'] = os.path.basename(filePath)
     otsobj['path'] = filePath
     otsobj['proof'] = otsproof
@@ -162,10 +162,13 @@ def verify_timestamp():
         # print(str(otsobj))
         # get the object id so we can reference it later
         _id = otsobj['_id']
-        print(_id)
-        print(otsobj)
-        print(getProofPath(otsobj['path']))
+        #print(_id)
+        #print(otsobj)
+        #print(getProofPath(otsobj['path']))
+        logger.info("Found obj ready to verify at %s with ID %s" % (getProofPath(otsobj['path']), _id))
+
         res = verify(getProofPath(otsobj['path']))
+        logger.info("Found obj with ID %s. Verification result %s" % (_id, res))
 
         if res.__contains__('Pending confirmation in Bitcoin blockchain'):
             verified = False
@@ -199,9 +202,12 @@ def upgrade_timestamps():
         # get the object id so we can reference it later
         _id = otsobj['_id']
 
+        logger.info("Found obj ready to upgrade at %s with ID %s" % (getProofPath(otsobj['path']), _id))
         #print(_id)
         # perfrom teh upgrade
         res = upgrade(getProofPath(otsobj['path']))
+
+        logger.info("Found obj with ID %s. Upgrade result %s" % (_id, res))
 
         #print(str(res))
         # create an event for the upgrade
@@ -222,13 +228,21 @@ def upgrade_timestamps():
 
 
 
-
+_starttime = time.time()
 # Create and save new file
+logger.info("Create new file started")
 create_new_file()
+logger.info("Create new file ended")
 
 # See who should be upgraded and upgrade them
+logger.info("Upgrade timestamps started")
 upgrade_timestamps()
+logger.info("Upgrade timestamps ended")
 
 # See who has been upgraded and verify them
+logger.info("Verify timestamps started")
 verify_timestamp()
+logger.info("Verify timestamps ended")
+_endtime = time.time()
 
+logger.info("Process started at %s and ended at %s. Complete run time: %s seconds" % (_starttime, _endtime, str(_endtime - _starttime)))
